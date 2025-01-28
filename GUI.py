@@ -1,8 +1,8 @@
 """
-Revised Advanced GUI with 1-or-2 Defects Handling and AutoCAD Retry
+GUI with 1-or-2 Defects Handling and AutoCAD Retry
 
-Author: YourName
-GitHub: https://github.com/YourGitHubName/YourRepository
+Author: Ali Aslan Demir
+GitHub: https://github.com/aliaslandemir/autocadmicropattern
 """
 
 import sys
@@ -259,7 +259,7 @@ class MplCanvas(FigureCanvas):
 class AdvancedHexGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Advanced Hex Grid & AutoCAD Transfer (Revised)")
+        self.setWindowTitle("Hex Grid & AutoCAD Transfer")
         self.setMinimumSize(1200, 700)
 
         # Main Layout: Horizontal

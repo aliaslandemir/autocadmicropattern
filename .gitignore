@@ -1,0 +1,25 @@
+# Python-specific
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+ENV/
+env/
+*.env
+
+# IDEs
+.idea/
+.vscode/
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Matplotlib cache
+.matplotlib/
