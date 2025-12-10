@@ -1,9 +1,5 @@
-```markdown
-# **AutoCAD MicroPattern**
 
-![License](https://img.shields.io/github/license/aliaslandemir/autocadmicropattern)
-![Python Version](https://img.shields.io/badge/python-3.8%2B-blue.svg)
-![GitHub stars](https://img.shields.io/github/stars/aliaslandemir/autocadmicropattern?style=social)
+# **AutoCAD MicroPattern**
 
 ---
 
@@ -44,6 +40,13 @@ Key applications include:
 - **AutoCAD Integration:** Transfers grid geometry directly to AutoCAD.  
 - **Real-Time Visualization:** Displays hex grids with orientation rectangles in embedded Matplotlib.  
 - **Save Options:** Export visualizations as PNG or PDF.
+
+## Screenshot
+
+Below is a preview of the GUI:
+
+![GUI Screenshot](docs/screenshot.png)
+
 
 ---
 
@@ -198,4 +201,3 @@ For questions or suggestions:
 - **GitHub:** [https://github.com/aliaslandemir](https://github.com/aliaslandemir)
 
 ---
-``` 

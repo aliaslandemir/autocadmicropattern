@@ -14,7 +14,7 @@ import pythoncom  # For COM initialization
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QHBoxLayout, QVBoxLayout, QGridLayout,
     QLabel, QLineEdit, QPushButton, QTextEdit, QFileDialog,
-    QMessageBox, QRadioButton, QButtonGroup, QGroupBox
+    QMessageBox, QRadioButton, QButtonGroup, QGroupBox, QComboBox
 )
 from PyQt5.QtCore import Qt
 
@@ -122,18 +122,39 @@ def add_rectangle(acad, center, width, height, angle_degrees):
         end_pt   = translated[(i + 1) % len(translated)]
         acad.model.AddLine(start_pt, end_pt)
 
+def add_triangle(acad, center, edge_length, angle_degrees):
+    """
+    Draw an equilateral triangle centered on 'center' with the given edge length.
+    """
+    angle_rad = math.radians(angle_degrees)
+    height = (math.sqrt(3) / 2.0) * edge_length
+    points = [
+        (-edge_length / 2.0, -height / 3.0),
+        ( edge_length / 2.0, -height / 3.0),
+        ( 0.0,                2.0 * height / 3.0)
+    ]
+    rotated = [rotate_point(x, y, angle_rad) for (x, y) in points]
+    translated = [APoint(center[0] + p[0], center[1] + p[1]) for p in rotated]
+    for i in range(len(translated)):
+        start_pt = translated[i]
+        end_pt = translated[(i + 1) % len(translated)]
+        acad.model.AddLine(start_pt, end_pt)
+
 def add_circle(acad, center, radius):
     acad.model.AddCircle(APoint(center[0], center[1]), radius)
 
 def transfer_to_autocad(radius, side_length, one_or_two,
+                        shape_type,
                         defect1, defect2,
                         theta0, m, rect_w, rect_h,
+                        triangle_edge, shape_circle_r,
                         circle_r, circle_r2):
     """
     Main function for transferring geometry to AutoCAD. 
     We connect to AutoCAD with a small retry loop.
     """
     acad = get_autocad_instance()
+    shape_type = (shape_type or "rectangle").lower()
 
     # Generate the grid
     hex_centers = generate_hex_grid(radius, side_length)
@@ -147,8 +168,13 @@ def transfer_to_autocad(radius, side_length, one_or_two,
             angle_radians = orientation_angle_2_defects(c, [defect1, defect2], math.radians(theta0))
         angle_degrees = math.degrees(angle_radians) % 360
 
-        # Place a rectangle
-        add_rectangle(acad, c, rect_w, rect_h, angle_degrees)
+        # Place the requested shape at each center
+        if shape_type == "triangle" and triangle_edge > 0:
+            add_triangle(acad, c, triangle_edge, angle_degrees)
+        elif shape_type == "circle" and shape_circle_r > 0:
+            add_circle(acad, c, shape_circle_r)
+        else:
+            add_rectangle(acad, c, rect_w, rect_h, angle_degrees)
 
     # Add two circles in the center
     add_circle(acad, (0,0), circle_r)
@@ -166,11 +192,12 @@ class MplCanvas(FigureCanvas):
 
     def draw_hex_grid(self, radius, side_length, one_or_two,
                       defect1, defect2,
-                      theta0, m, rect_w, rect_h):
+                      theta0, m, rect_w, rect_h,
+                      shape_type, triangle_edge, shape_circle_r):
         """
         Plot the hex grid + orientation rectangles in this canvas.
         """
-        from matplotlib.patches import Rectangle
+        from matplotlib.patches import Rectangle, Polygon, Circle
         from matplotlib.transforms import Affine2D
         from matplotlib.cm import hsv
 
@@ -203,7 +230,9 @@ class MplCanvas(FigureCanvas):
             hx, hy = hexagon_xy(c, side_length)
             self.ax.fill(hx, hy, facecolor='lightgray', edgecolor='gray', linewidth=1)
 
-        # Now draw rectangles at each center
+        shape_type = (shape_type or "rectangle").lower()
+
+        # Now draw requested shapes at each center
         for (c, ang_rad) in zip(centers, angles_radians):
             # Map angle to [0..1] for an HSV colormap
             # We do angle in [ -pi..pi ], shift up so 0..2pi => [0..1].
@@ -211,19 +240,43 @@ class MplCanvas(FigureCanvas):
             hue = (ang_rad % (2*math.pi)) / (2*math.pi)
             color = hsv(hue)
 
-            rect = Rectangle(
-                xy=(-rect_w/2, -rect_h/2),
-                width=rect_w,
-                height=rect_h,
-                color=color,
-                alpha=0.5
-            )
-            t = (Affine2D()
-                 .rotate_around(0, 0, ang_rad)
-                 .translate(c[0], c[1])
-                 + self.ax.transData)
-            rect.set_transform(t)
-            self.ax.add_patch(rect)
+            if shape_type == "triangle" and triangle_edge > 0:
+                tri_height = (math.sqrt(3) / 2.0) * triangle_edge
+                triangle_coords = [
+                    (-triangle_edge / 2.0, -tri_height / 3.0),
+                    ( triangle_edge / 2.0, -tri_height / 3.0),
+                    (0.0,                  2.0 * tri_height / 3.0)
+                ]
+                tri = Polygon(triangle_coords,
+                              color=color, alpha=0.5, ec='black', lw=0.5)
+                t = (Affine2D()
+                     .rotate_around(0, 0, ang_rad)
+                     .translate(c[0], c[1])
+                     + self.ax.transData)
+                tri.set_transform(t)
+                self.ax.add_patch(tri)
+            elif shape_type == "circle" and shape_circle_r > 0:
+                circ = Circle(xy=(c[0], c[1]),
+                              radius=shape_circle_r,
+                              facecolor=color,
+                              edgecolor='black',
+                              alpha=0.4,
+                              linewidth=0.5)
+                self.ax.add_patch(circ)
+            else:
+                rect = Rectangle(
+                    xy=(-rect_w/2, -rect_h/2),
+                    width=rect_w,
+                    height=rect_h,
+                    color=color,
+                    alpha=0.5
+                )
+                t = (Affine2D()
+                     .rotate_around(0, 0, ang_rad)
+                     .translate(c[0], c[1])
+                     + self.ax.transData)
+                rect.set_transform(t)
+                self.ax.add_patch(rect)
 
             # Show numeric angle in degrees
             deg_val = math.degrees(ang_rad)
@@ -303,6 +356,25 @@ class AdvancedHexGUI(QWidget):
         form_layout.addWidget(self.rect_h_input, row, 1)
         row += 1
 
+        # 4b) Shape Selection
+        form_layout.addWidget(QLabel("Shape Type:"), row, 0)
+        self.shape_combo = QComboBox()
+        self.shape_combo.addItems(["Rectangle", "Triangle", "Circle"])
+        form_layout.addWidget(self.shape_combo, row, 1)
+        row += 1
+
+        # 4c) Triangle Edge Length (equilateral)
+        form_layout.addWidget(QLabel("Triangle Edge Length:"), row, 0)
+        self.triangle_edge_input = QLineEdit("12")
+        form_layout.addWidget(self.triangle_edge_input, row, 1)
+        row += 1
+
+        # 4d) Circle Radius (per hex)
+        form_layout.addWidget(QLabel("Shape Circle Radius:"), row, 0)
+        self.shape_circle_r_input = QLineEdit("10")
+        form_layout.addWidget(self.shape_circle_r_input, row, 1)
+        row += 1
+
         # 5) Defect selection
         defect_group = QGroupBox("Number of Defects")
         defect_layout = QHBoxLayout(defect_group)
@@ -319,6 +391,7 @@ class AdvancedHexGUI(QWidget):
 
         # Connect a slot so we can enable/disable the second defect line
         self.radio_group.buttonClicked[int].connect(self.on_defect_radio_changed)
+        self.shape_combo.currentTextChanged.connect(self.on_shape_changed)
 
         # 6) Defect #1
         form_layout.addWidget(QLabel("Defect #1 (x,y):"), row, 0)
@@ -380,6 +453,7 @@ class AdvancedHexGUI(QWidget):
 
         # Make sure the second defect line is set according to default radio:
         self.on_defect_radio_changed(self.radio_group.checkedId())
+        self.on_shape_changed(self.shape_combo.currentText())
 
     def on_defect_radio_changed(self, id_):
         """
@@ -391,6 +465,20 @@ class AdvancedHexGUI(QWidget):
         else:
             # 2 Defects
             self.def2_input.setEnabled(True)
+
+    def on_shape_changed(self, shape_text):
+        """
+        Enable dimension inputs based on selected primitive.
+        """
+        shape = (shape_text or "").lower()
+        enable_rect = (shape == "rectangle")
+        enable_tri = (shape == "triangle")
+        enable_circle = (shape == "circle")
+
+        self.rect_w_input.setEnabled(enable_rect)
+        self.rect_h_input.setEnabled(enable_rect)
+        self.triangle_edge_input.setEnabled(enable_tri)
+        self.shape_circle_r_input.setEnabled(enable_circle)
 
     def parse_defect(self, text):
         """
@@ -412,6 +500,11 @@ class AdvancedHexGUI(QWidget):
             side_len = float(self.side_len_input.text())
             rect_w = float(self.rect_w_input.text())
             rect_h = float(self.rect_h_input.text())
+            shape_type = self.shape_combo.currentText().lower()
+            tri_text = self.triangle_edge_input.text().strip()
+            tri_edge = float(tri_text) if tri_text else 0.0
+            circle_text = self.shape_circle_r_input.text().strip()
+            shape_circle_r = float(circle_text) if circle_text else 0.0
             one_or_two = self.radio_group.checkedId()  # 1 or 2
             def1 = self.parse_defect(self.def1_input.text())
             def2 = self.parse_defect(self.def2_input.text())
@@ -420,6 +513,20 @@ class AdvancedHexGUI(QWidget):
             circle_r = float(self.circle_r_input.text())
             circle_r2 = float(self.circle_r2_input.text())
 
+            if radius < 0:
+                raise ValueError("Hex grid radius must be non-negative.")
+            if side_len <= 0:
+                raise ValueError("Hex side length must be positive.")
+            if shape_type == "rectangle":
+                if rect_w <= 0 or rect_h <= 0:
+                    raise ValueError("Rectangle width/height must be positive.")
+            if shape_type == "triangle":
+                if tri_edge <= 0:
+                    raise ValueError("Triangle edge length must be positive.")
+            if shape_type == "circle":
+                if shape_circle_r <= 0:
+                    raise ValueError("Shape circle radius must be positive.")
+            
             if one_or_two == 1:
                 # Must have a valid defect1
                 if def1 is None:
@@ -434,6 +541,9 @@ class AdvancedHexGUI(QWidget):
                 'side_length': side_len,
                 'rect_w': rect_w,
                 'rect_h': rect_h,
+                'shape_type': shape_type,
+                'triangle_edge': tri_edge,
+                'shape_circle_r': shape_circle_r,
                 'one_or_two': one_or_two,
                 'def1': def1,
                 'def2': def2,
@@ -467,7 +577,10 @@ class AdvancedHexGUI(QWidget):
                 theta0=params['theta0_deg'],
                 m=params['m_val'],
                 rect_w=params['rect_w'],
-                rect_h=params['rect_h']
+                rect_h=params['rect_h'],
+                shape_type=params['shape_type'],
+                triangle_edge=params['triangle_edge'],
+                shape_circle_r=params['shape_circle_r']
             )
             self.log_area.append("Model displayed on the left.")
         except Exception as e:
@@ -507,12 +620,15 @@ class AdvancedHexGUI(QWidget):
                 radius=params['radius'],
                 side_length=params['side_length'],
                 one_or_two=params['one_or_two'],
+                shape_type=params['shape_type'],
                 defect1=params['def1'] if params['def1'] else (0,0),
                 defect2=params['def2'] if params['def2'] else (0,0),
                 theta0=params['theta0_deg'],
                 m=params['m_val'],
                 rect_w=params['rect_w'],
                 rect_h=params['rect_h'],
+                triangle_edge=params['triangle_edge'],
+                shape_circle_r=params['shape_circle_r'],
                 circle_r=params['circle_r'],
                 circle_r2=params['circle_r2']
             )
