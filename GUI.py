@@ -1,5 +1,5 @@
 """
-GUI with 1-or-2 Defects Handling and AutoCAD Retry
+Hexagonal micropattern preview and optional AutoCAD export
 
 Author: Ali Aslan Demir
 GitHub: https://github.com/aliaslandemir/autocadmicropattern
@@ -7,302 +7,112 @@ GitHub: https://github.com/aliaslandemir/autocadmicropattern
 
 import sys
 import math
-import time
 import numpy as np
 
-import pythoncom  # For COM initialization
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QHBoxLayout, QVBoxLayout, QGridLayout,
     QLabel, QLineEdit, QPushButton, QTextEdit, QFileDialog,
-    QMessageBox, QRadioButton, QButtonGroup, QGroupBox, QComboBox
+    QRadioButton, QButtonGroup, QGroupBox, QComboBox, QCheckBox,
+    QScrollArea, QProgressBar
 )
-from PyQt5.QtCore import Qt
-
-import matplotlib
-matplotlib.use("Qt5Agg")
-import matplotlib.pyplot as plt
+from PyQt5.QtCore import QThread, pyqtSignal
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
 from matplotlib.figure import Figure
+from matplotlib.collections import PolyCollection, PatchCollection
+from matplotlib.patches import Circle
+from matplotlib import colormaps
 
-# Attempt to import pyautocad
-try:
-    from pyautocad import Autocad, APoint
-    PYAUTOCAD_AVAILABLE = True
-except ImportError:
-    PYAUTOCAD_AVAILABLE = False
+from geometry import (
+    PatternParameters, generate_hex_grid, orientation_angles, shape_vertices,
+)
+from autocad_export import (
+    AUTOCAD_AVAILABLE, AUTOCAD_IMPORT_ERROR, transfer_to_autocad, TransferCancelled,
+)
 
 
-# ----------------------------------------------------------------
-# AutoCAD connection with a simple retry loop
-# ----------------------------------------------------------------
-def get_autocad_instance(retries=3, delay=0.5):
-    """
-    Attempt to create or connect to AutoCAD. Retry on COM errors
-    like "Call was rejected by callee."
-    """
-    for attempt in range(retries):
+class TransferWorker(QThread):
+    progress = pyqtSignal(int, int)
+    succeeded = pyqtSignal()
+    failed = pyqtSignal(str)
+
+    def __init__(self, params, parent=None):
+        super().__init__(parent)
+        self.params = params
+
+    def run(self):
         try:
-            pythoncom.CoInitialize()
-            acad = Autocad(create_if_not_exists=True)
-            return acad
-        except Exception as e:
-            msg = str(e)
-            if "Call was rejected by callee" in msg:
-                time.sleep(delay)
-            else:
-                raise
-    # If we get here, we failed all retries
-    raise RuntimeError("Failed to connect to AutoCAD after multiple attempts.")
-
-
-# ----------------------------------------------------------------
-# Hex Grid + Orientation Functions
-# ----------------------------------------------------------------
-def generate_hex_grid(radius, side_length):
-    """
-    Return Nx2 array of (x,y) centers for a hexagonal grid.
-    """
-    q, r = np.meshgrid(range(-radius, radius + 1), range(-radius, radius + 1))
-    mask = np.abs(q + r) <= radius
-    x = 1.5 * side_length * q[mask]
-    y = np.sqrt(3) * side_length * (r[mask] + 0.5 * q[mask])
-    return np.vstack((x, y)).T
-
-def hexagon_xy(center, size):
-    """
-    Return arrays x[], y[] describing the perimeter of a single hexagon.
-    """
-    angles = np.linspace(0, 2 * np.pi, 7)
-    x = center[0] + size * np.cos(angles)
-    y = center[1] + size * np.sin(angles)
-    return x, y
-
-def orientation_angle_1_defect(center, defect, theta0, m):
-    """
-    For ONE defect, use a vortex-like formula from 'Role of tissue...' references:
-       theta(r) = theta0 + m * arctan2( (y - y_def), (x - x_def) )
-    """
-    dx = center[0] - defect[0]
-    dy = center[1] - defect[1]
-    return theta0 + m * math.atan2(dy, dx)
-
-def orientation_angle_2_defects(center, defects, theta0):
-    """
-    For TWO defects, sum up the angles to each defect, then offset by theta0.
-    This was used in earlier scripts/figures (sum-of-angles approach).
-       theta(r) = theta0 + sum( atan2(y - y_def, x - x_def) )
-    """
-    angle_sum = 0.0
-    for d in defects:
-        dx = center[0] - d[0]
-        dy = center[1] - d[1]
-        angle_sum += math.atan2(dy, dx)
-    return angle_sum + theta0
-
-# ----------------------------------------------------------------
-# AutoCAD geometry
-# ----------------------------------------------------------------
-def rotate_point(x, y, angle_radians):
-    c = math.cos(angle_radians)
-    s = math.sin(angle_radians)
-    return (x*c - y*s, x*s + y*c)
-
-def add_rectangle(acad, center, width, height, angle_degrees):
-    angle_rad = math.radians(angle_degrees)
-    corners = [
-        (-width/2, -height/2),
-        ( width/2, -height/2),
-        ( width/2,  height/2),
-        (-width/2,  height/2)
-    ]
-    rotated = [rotate_point(x, y, angle_rad) for (x, y) in corners]
-    translated = [APoint(center[0] + p[0], center[1] + p[1]) for p in rotated]
-    for i in range(len(translated)):
-        start_pt = translated[i]
-        end_pt   = translated[(i + 1) % len(translated)]
-        acad.model.AddLine(start_pt, end_pt)
-
-def add_triangle(acad, center, edge_length, angle_degrees):
-    """
-    Draw an equilateral triangle centered on 'center' with the given edge length.
-    """
-    angle_rad = math.radians(angle_degrees)
-    height = (math.sqrt(3) / 2.0) * edge_length
-    points = [
-        (-edge_length / 2.0, -height / 3.0),
-        ( edge_length / 2.0, -height / 3.0),
-        ( 0.0,                2.0 * height / 3.0)
-    ]
-    rotated = [rotate_point(x, y, angle_rad) for (x, y) in points]
-    translated = [APoint(center[0] + p[0], center[1] + p[1]) for p in rotated]
-    for i in range(len(translated)):
-        start_pt = translated[i]
-        end_pt = translated[(i + 1) % len(translated)]
-        acad.model.AddLine(start_pt, end_pt)
-
-def add_circle(acad, center, radius):
-    acad.model.AddCircle(APoint(center[0], center[1]), radius)
-
-def transfer_to_autocad(radius, side_length, one_or_two,
-                        shape_type,
-                        defect1, defect2,
-                        theta0, m, rect_w, rect_h,
-                        triangle_edge, shape_circle_r,
-                        circle_r, circle_r2):
-    """
-    Main function for transferring geometry to AutoCAD. 
-    We connect to AutoCAD with a small retry loop.
-    """
-    acad = get_autocad_instance()
-    shape_type = (shape_type or "rectangle").lower()
-
-    # Generate the grid
-    hex_centers = generate_hex_grid(radius, side_length)
-
-    for c in hex_centers:
-        # Decide orientation angle depending on 1 or 2 defects
-        if one_or_two == 1:
-            angle_radians = orientation_angle_1_defect(c, defect1, math.radians(theta0), m)
+            transfer_to_autocad(self.params, self.progress.emit, self.isInterruptionRequested)
+        except TransferCancelled as exc:
+            self.failed.emit(str(exc))
+        except Exception as exc:
+            self.failed.emit(f"Transfer failed: {exc}. Partial geometry may remain; use Undo in AutoCAD.")
         else:
-            # 2-defect approach
-            angle_radians = orientation_angle_2_defects(c, [defect1, defect2], math.radians(theta0))
-        angle_degrees = math.degrees(angle_radians) % 360
-
-        # Place the requested shape at each center
-        if shape_type == "triangle" and triangle_edge > 0:
-            add_triangle(acad, c, triangle_edge, angle_degrees)
-        elif shape_type == "circle" and shape_circle_r > 0:
-            add_circle(acad, c, shape_circle_r)
-        else:
-            add_rectangle(acad, c, rect_w, rect_h, angle_degrees)
-
-    # Add two circles in the center
-    add_circle(acad, (0,0), circle_r)
-    add_circle(acad, (0,0), circle_r2)
+            self.succeeded.emit()
 
 
-# ----------------------------------------------------------------
-# Embedded Matplotlib Canvas
-# ----------------------------------------------------------------
 class MplCanvas(FigureCanvas):
     def __init__(self, parent=None, width=6, height=6, dpi=100):
-        self.fig = Figure(figsize=(width, height), dpi=dpi)
+        self.fig = Figure(figsize=(width, height), dpi=dpi, layout="constrained")
         self.ax = self.fig.add_subplot(111)
-        super(MplCanvas, self).__init__(self.fig)
+        super().__init__(self.fig)
+        self.setParent(parent)
 
-    def draw_hex_grid(self, radius, side_length, one_or_two,
-                      defect1, defect2,
-                      theta0, m, rect_w, rect_h,
-                      shape_type, triangle_edge, shape_circle_r):
-        """
-        Plot the hex grid + orientation rectangles in this canvas.
-        """
-        from matplotlib.patches import Rectangle, Polygon, Circle
-        from matplotlib.transforms import Affine2D
-        from matplotlib.cm import hsv
-
+    def draw_hex_grid(self, params, show_grid=True, show_angles=True):
+        params.validate()
+        centers = generate_hex_grid(params.radius, params.side_length)
+        angles = orientation_angles(centers, params)
         self.ax.clear()
-        centers = generate_hex_grid(radius, side_length)
+        if show_grid:
+            hex_angles = np.arange(6) * math.pi / 3
+            offsets = params.side_length * np.column_stack((np.cos(hex_angles), np.sin(hex_angles)))
+            self.ax.add_collection(PolyCollection(
+                centers[:, None, :] + offsets, facecolors="#eeeeee",
+                edgecolors="#aaaaaa", linewidths=0.5, zorder=1))
 
-        # For color mapping, we might map angles to [0..1] in hue
-        # We'll store angles in radians, then shift them to [0..1].
-        angles_radians = []
-
-        # Compute orientation angle for each center
-        for c in centers:
-            if one_or_two == 1:
-                ang_rad = orientation_angle_1_defect(
-                    center=c, 
-                    defect=defect1,
-                    theta0=math.radians(theta0),
-                    m=m
-                )
-            else:
-                ang_rad = orientation_angle_2_defects(
-                    center=c,
-                    defects=[defect1, defect2],
-                    theta0=math.radians(theta0)
-                )
-            angles_radians.append(ang_rad)
-
-        # Plot hexagons
-        for c in centers:
-            hx, hy = hexagon_xy(c, side_length)
-            self.ax.fill(hx, hy, facecolor='lightgray', edgecolor='gray', linewidth=1)
-
-        shape_type = (shape_type or "rectangle").lower()
-
-        # Now draw requested shapes at each center
-        for (c, ang_rad) in zip(centers, angles_radians):
-            # Map angle to [0..1] for an HSV colormap
-            # We do angle in [ -pi..pi ], shift up so 0..2pi => [0..1].
-            # Or just mod it: hue = (ang_rad % (2*pi)) / (2*pi).
-            hue = (ang_rad % (2*math.pi)) / (2*math.pi)
-            color = hsv(hue)
-
-            if shape_type == "triangle" and triangle_edge > 0:
-                tri_height = (math.sqrt(3) / 2.0) * triangle_edge
-                triangle_coords = [
-                    (-triangle_edge / 2.0, -tri_height / 3.0),
-                    ( triangle_edge / 2.0, -tri_height / 3.0),
-                    (0.0,                  2.0 * tri_height / 3.0)
-                ]
-                tri = Polygon(triangle_coords,
-                              color=color, alpha=0.5, ec='black', lw=0.5)
-                t = (Affine2D()
-                     .rotate_around(0, 0, ang_rad)
-                     .translate(c[0], c[1])
-                     + self.ax.transData)
-                tri.set_transform(t)
-                self.ax.add_patch(tri)
-            elif shape_type == "circle" and shape_circle_r > 0:
-                circ = Circle(xy=(c[0], c[1]),
-                              radius=shape_circle_r,
-                              facecolor=color,
-                              edgecolor='black',
-                              alpha=0.4,
-                              linewidth=0.5)
-                self.ax.add_patch(circ)
-            else:
-                rect = Rectangle(
-                    xy=(-rect_w/2, -rect_h/2),
-                    width=rect_w,
-                    height=rect_h,
-                    color=color,
-                    alpha=0.5
-                )
-                t = (Affine2D()
-                     .rotate_around(0, 0, ang_rad)
-                     .translate(c[0], c[1])
-                     + self.ax.transData)
-                rect.set_transform(t)
-                self.ax.add_patch(rect)
-
-            # Show numeric angle in degrees
-            deg_val = math.degrees(ang_rad)
-            self.ax.text(c[0], c[1], f"{deg_val:.0f}°",
-                         ha='center', va='center', fontsize=8)
-
-        # Draw defect(s) and center
-        self.ax.scatter([0], [0], color='red', label='Center', zorder=5)
-        if one_or_two == 1:
-            self.ax.scatter([defect1[0]], [defect1[1]], color='blue', label='Defect')
+        colors = colormaps["hsv"]((angles % (2 * math.pi)) / (2 * math.pi))
+        if params.shape_type == "circle":
+            shapes = PatchCollection(
+                [Circle(center, params.shape_circle_r) for center in centers],
+                facecolors=colors, edgecolors="black", linewidths=0.5, alpha=0.5, zorder=2)
+            shape_min = centers.min(axis=0) - params.shape_circle_r
+            shape_max = centers.max(axis=0) + params.shape_circle_r
         else:
-            self.ax.scatter([defect1[0], defect2[0]],
-                            [defect1[1], defect2[1]],
-                            color='blue', label='Defects')
+            vertices = shape_vertices(centers, angles, params)
+            shapes = PolyCollection(vertices, facecolors=colors, edgecolors="black",
+                                    linewidths=0.5, alpha=0.5, zorder=2)
+            shape_min = vertices.min(axis=(0, 1))
+            shape_max = vertices.max(axis=(0, 1))
+        self.ax.add_collection(shapes)
+        # Thousands of text artists overwhelm both rendering and readability.
+        if show_angles and len(centers) <= 500:
+            for center, angle in zip(centers, angles):
+                self.ax.text(*center, f"{math.degrees(angle) % 360:.0f}°",
+                             ha="center", va="center", fontsize=7, zorder=3)
 
-        self.ax.set_aspect('equal', 'box')
-        self.ax.grid(True, linestyle='--')
-        self.ax.axhline(y=0, color='k', linewidth=1)
-        self.ax.axvline(x=0, color='k', linewidth=1)
-        if len(centers) > 0:
-            margin = side_length * 2
-            xvals, yvals = centers[:,0], centers[:,1]
-            self.ax.set_xlim(xvals.min() - margin, xvals.max() + margin)
-            self.ax.set_ylim(yvals.min() - margin, yvals.max() + margin)
-        self.ax.legend()
-        self.ax.set_title("Nematic Defects in Hexagonal Grid")
+        for radius in params.center_circle_radii:
+            self.ax.add_patch(Circle((0, 0), radius, fill=False, edgecolor="#333333",
+                                     linewidth=1.2, zorder=4))
+        self.ax.scatter([0], [0], color="red", label="Center", zorder=5)
+        defects = np.asarray((params.defect1, params.defect2)[:params.one_or_two])
+        self.ax.scatter(defects[:, 0], defects[:, 1], color="blue", marker="x",
+                        label="Defect" if params.one_or_two == 1 else "Defects", zorder=5)
+        ring_extent = max(params.center_circle_radii, default=0)
+        lower = np.minimum.reduce([centers.min(axis=0) - params.side_length,
+                                   shape_min, defects.min(axis=0), np.full(2, -ring_extent)])
+        upper = np.maximum.reduce([centers.max(axis=0) + params.side_length,
+                                   shape_max, defects.max(axis=0), np.full(2, ring_extent)])
+        margin = max(params.side_length * 0.2, float(np.max(upper-lower)) * 0.04)
+        self.ax.set_xlim(lower[0]-margin, upper[0]+margin)
+        self.ax.set_ylim(lower[1]-margin, upper[1]+margin)
+        self.ax.set_aspect("equal", "box")
+        self.ax.set_xlabel("x (drawing units)")
+        self.ax.set_ylabel("y (drawing units)")
+        self.ax.grid(True, linestyle="--", alpha=0.25)
+        self.ax.axhline(0, color="black", linewidth=0.5)
+        self.ax.axvline(0, color="black", linewidth=0.5)
+        self.ax.legend(loc="upper right")
+        self.ax.set_title(f"{params.shape_type.title()} pattern · {len(centers):,} cells")
         self.draw()
 
 
@@ -313,19 +123,29 @@ class AdvancedHexGUI(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Hex Grid & AutoCAD Transfer")
-        self.setMinimumSize(1200, 700)
+        self.resize(1200, 800)
+        self.setMinimumSize(850, 600)
+        self.transfer_worker = None
+        self.preview_parameters = None
 
         # Main Layout: Horizontal
         main_layout = QHBoxLayout(self)
-        self.setLayout(main_layout)
 
         # Left: Matplotlib Canvas
         self.canvas = MplCanvas(self, width=6, height=6, dpi=100)
-        main_layout.addWidget(self.canvas, stretch=2)
+        preview_layout = QVBoxLayout()
+        preview_layout.addWidget(NavigationToolbar2QT(self.canvas, self))
+        preview_layout.addWidget(self.canvas)
+        main_layout.addLayout(preview_layout, stretch=2)
 
         # Right: Parameter panel + logging
-        right_panel = QVBoxLayout()
-        main_layout.addLayout(right_panel, stretch=1)
+        right_widget = QWidget()
+        right_panel = QVBoxLayout(right_widget)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(right_widget)
+        scroll.setMinimumWidth(350)
+        main_layout.addWidget(scroll, stretch=1)
 
         form_layout = QGridLayout()
         right_panel.addLayout(form_layout)
@@ -333,7 +153,7 @@ class AdvancedHexGUI(QWidget):
         row = 0
 
         # 1) Hex Grid Radius
-        form_layout.addWidget(QLabel("Hex Grid Radius:"), row, 0)
+        form_layout.addWidget(QLabel("Hex Grid Radius (0–100):"), row, 0)
         self.radius_input = QLineEdit("9")
         form_layout.addWidget(self.radius_input, row, 1)
         row += 1
@@ -418,15 +238,26 @@ class AdvancedHexGUI(QWidget):
         row += 1
 
         # 10) Circle Radius
-        form_layout.addWidget(QLabel("Circle Radius:"), row, 0)
+        form_layout.addWidget(QLabel("Center Ring 1 Radius:"), row, 0)
         self.circle_r_input = QLineEdit("45")
+        self.circle_r_input.setToolTip("Use 0 to disable this center circle.")
         form_layout.addWidget(self.circle_r_input, row, 1)
         row += 1
 
         # 11) Circle Radius 2
-        form_layout.addWidget(QLabel("Circle Radius 2:"), row, 0)
+        form_layout.addWidget(QLabel("Center Ring 2 Radius:"), row, 0)
         self.circle_r2_input = QLineEdit("45")
+        self.circle_r2_input.setToolTip("Use 0 to disable this center circle. Equal radii create one circle.")
         form_layout.addWidget(self.circle_r2_input, row, 1)
+        row += 1
+
+        self.show_grid = QCheckBox("Show hexagonal grid")
+        self.show_grid.setChecked(True)
+        form_layout.addWidget(self.show_grid, row, 0, 1, 2)
+        row += 1
+        self.show_angles = QCheckBox("Show angles (up to 500 cells)")
+        self.show_angles.setChecked(True)
+        form_layout.addWidget(self.show_angles, row, 0, 1, 2)
         row += 1
 
         # Action Buttons
@@ -445,20 +276,39 @@ class AdvancedHexGUI(QWidget):
         form_layout.addWidget(self.transfer_button, row, 0, 1, 2)
         row += 1
 
+        self.cancel_button = QPushButton("Cancel Transfer")
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.clicked.connect(self.on_cancel_transfer)
+        form_layout.addWidget(self.cancel_button, row, 0, 1, 2)
+        row += 1
+        self.transfer_progress = QProgressBar()
+        self.transfer_progress.setRange(0, 100)
+        form_layout.addWidget(self.transfer_progress, row, 0, 1, 2)
+
         # Log / Status
         self.log_area = QTextEdit()
         self.log_area.setReadOnly(True)
+        self.log_area.document().setMaximumBlockCount(500)
+        self.log_area.setMinimumHeight(100)
         self.log_area.setPlaceholderText("Log messages / status here...")
         right_panel.addWidget(self.log_area)
 
         # Make sure the second defect line is set according to default radio:
         self.on_defect_radio_changed(self.radio_group.checkedId())
         self.on_shape_changed(self.shape_combo.currentText())
+        self.show_grid.toggled.connect(self.on_generate)
+        self.show_angles.toggled.connect(self.on_generate)
+        if not AUTOCAD_AVAILABLE:
+            self.transfer_button.setEnabled(False)
+            self.transfer_button.setToolTip(AUTOCAD_IMPORT_ERROR)
+            self.log_area.append(AUTOCAD_IMPORT_ERROR + " Preview and image export are available.")
+        self.on_generate()
 
     def on_defect_radio_changed(self, id_):
         """
         Enable/disable second defect input based on the chosen radio.
         """
+        self.m_input.setEnabled(id_ == 1)
         if id_ == 1:
             # 1 Defect
             self.def2_input.setEnabled(False)
@@ -480,161 +330,141 @@ class AdvancedHexGUI(QWidget):
         self.triangle_edge_input.setEnabled(enable_tri)
         self.shape_circle_r_input.setEnabled(enable_circle)
 
-    def parse_defect(self, text):
-        """
-        Parse "x,y" from a string.
-        Returns (x,y) as floats or None if invalid.
-        """
+    @staticmethod
+    def parse_defect(text):
         try:
             x_str, y_str = text.split(",")
-            return (float(x_str.strip()), float(y_str.strip()))
-        except:
+            result = (float(x_str.strip()), float(y_str.strip()))
+            return result if all(math.isfinite(v) for v in result) else None
+        except (ValueError, TypeError):
             return None
 
     def get_parameters(self):
-        """
-        Read parameters from the GUI, return a dict or None on error.
-        """
+        """Only parse fields used by the selected shape and defect mode."""
         try:
-            radius = int(self.radius_input.text())
-            side_len = float(self.side_len_input.text())
-            rect_w = float(self.rect_w_input.text())
-            rect_h = float(self.rect_h_input.text())
-            shape_type = self.shape_combo.currentText().lower()
-            tri_text = self.triangle_edge_input.text().strip()
-            tri_edge = float(tri_text) if tri_text else 0.0
-            circle_text = self.shape_circle_r_input.text().strip()
-            shape_circle_r = float(circle_text) if circle_text else 0.0
-            one_or_two = self.radio_group.checkedId()  # 1 or 2
-            def1 = self.parse_defect(self.def1_input.text())
-            def2 = self.parse_defect(self.def2_input.text())
-            theta0_deg = float(self.theta0_input.text())
-            m_val = float(self.m_input.text())
-            circle_r = float(self.circle_r_input.text())
-            circle_r2 = float(self.circle_r2_input.text())
+            def number(field, label):
+                try:
+                    return float(field.text())
+                except ValueError:
+                    raise ValueError(f"{label} must be a number.") from None
 
-            if radius < 0:
-                raise ValueError("Hex grid radius must be non-negative.")
-            if side_len <= 0:
-                raise ValueError("Hex side length must be positive.")
-            if shape_type == "rectangle":
-                if rect_w <= 0 or rect_h <= 0:
-                    raise ValueError("Rectangle width/height must be positive.")
-            if shape_type == "triangle":
-                if tri_edge <= 0:
-                    raise ValueError("Triangle edge length must be positive.")
-            if shape_type == "circle":
-                if shape_circle_r <= 0:
-                    raise ValueError("Shape circle radius must be positive.")
-            
-            if one_or_two == 1:
-                # Must have a valid defect1
-                if def1 is None:
-                    raise ValueError("Defect #1 is invalid.")
-            else:
-                # Must have valid defect1 + defect2
-                if def1 is None or def2 is None:
-                    raise ValueError("One or both defects invalid for 2 defects.")
-            
-            return {
-                'radius': radius,
-                'side_length': side_len,
-                'rect_w': rect_w,
-                'rect_h': rect_h,
-                'shape_type': shape_type,
-                'triangle_edge': tri_edge,
-                'shape_circle_r': shape_circle_r,
-                'one_or_two': one_or_two,
-                'def1': def1,
-                'def2': def2,
-                'theta0_deg': theta0_deg,
-                'm_val': m_val,
-                'circle_r': circle_r,
-                'circle_r2': circle_r2
-            }
-
-        except ValueError as ve:
-            self.log_area.append(f"Parameter error: {ve}")
+            shape = self.shape_combo.currentText().lower()
+            count = self.radio_group.checkedId()
+            try:
+                radius = int(self.radius_input.text())
+            except ValueError:
+                raise ValueError("Hex grid radius must be a whole number.") from None
+            params = PatternParameters(
+                radius=radius,
+                side_length=number(self.side_len_input, "Hex side length"),
+                one_or_two=count,
+                shape_type=shape,
+                defect1=self.parse_defect(self.def1_input.text()),
+                defect2=self.parse_defect(self.def2_input.text()) if count == 2 else (0, 0),
+                theta0=number(self.theta0_input, "Angle offset"),
+                m=number(self.m_input, "Angle multiplier") if count == 1 else 1.0,
+                rect_w=number(self.rect_w_input, "Rectangle width") if shape == "rectangle" else 1.0,
+                rect_h=number(self.rect_h_input, "Rectangle height") if shape == "rectangle" else 1.0,
+                triangle_edge=number(self.triangle_edge_input, "Triangle edge length") if shape == "triangle" else 1.0,
+                shape_circle_r=number(self.shape_circle_r_input, "Shape circle radius") if shape == "circle" else 1.0,
+                circle_r=number(self.circle_r_input, "Center circle radius"),
+                circle_r2=number(self.circle_r2_input, "Center circle radius 2"),
+            )
+            return params.validate()
+        except ValueError as exc:
+            self.log_area.append(f"Parameter error: {exc}")
             return None
 
     def on_generate(self):
-        """
-        Generate the hex‐grid model in the embedded Matplotlib canvas.
-        """
         params = self.get_parameters()
-        if not params:
+        if params is None:
             return
-        self.log_area.append("Generating model...")
-
         try:
-            # Draw on canvas
-            self.canvas.draw_hex_grid(
-                radius=params['radius'],
-                side_length=params['side_length'],
-                one_or_two=params['one_or_two'],
-                defect1=params['def1'],
-                defect2=params['def2'] if params['def2'] else (0,0),
-                theta0=params['theta0_deg'],
-                m=params['m_val'],
-                rect_w=params['rect_w'],
-                rect_h=params['rect_h'],
-                shape_type=params['shape_type'],
-                triangle_edge=params['triangle_edge'],
-                shape_circle_r=params['shape_circle_r']
-            )
-            self.log_area.append("Model displayed on the left.")
-        except Exception as e:
-            self.log_area.append(f"Error generating model: {e}")
+            self.canvas.draw_hex_grid(params, self.show_grid.isChecked(), self.show_angles.isChecked())
+            self.preview_parameters = params
+            self.save_button.setEnabled(True)
+            count = 1 + 3 * params.radius * (params.radius + 1)
+            self.log_area.append(f"Displayed {count:,} {params.shape_type} cells.")
+            if self.show_angles.isChecked() and count > 500:
+                self.log_area.append("Angle labels hidden above 500 cells to keep the preview responsive.")
+        except Exception as exc:
+            self.preview_parameters = None
+            self.save_button.setEnabled(False)
+            self.log_area.append(f"Error generating model: {exc}")
 
     def on_save_figure(self):
-        """
-        Save the current figure to disk.
-        """
+        if self.preview_parameters is None:
+            self.log_area.append("Generate a model before saving.")
+            return
         try:
-            filename, _ = QFileDialog.getSaveFileName(
-                self, "Save Figure", "",
-                "PNG Files (*.png);;PDF Files (*.pdf);;All Files (*)"
-            )
+            filename, selected_filter = QFileDialog.getSaveFileName(
+                self, "Save Figure", "pattern.png", "PNG Files (*.png);;PDF Files (*.pdf)")
             if filename:
-                self.canvas.fig.savefig(filename)
+                from pathlib import Path
+                if not Path(filename).suffix:
+                    filename += ".pdf" if selected_filter.startswith("PDF") else ".png"
+                self.canvas.fig.savefig(filename, dpi=200)
                 self.log_area.append(f"Figure saved to: {filename}")
-        except Exception as e:
-            self.log_area.append(f"Error saving figure: {e}")
+        except Exception as exc:
+            self.log_area.append(f"Error saving figure: {exc}")
 
     def on_transfer(self):
-        """
-        Transfer geometry to AutoCAD, with retry logic to avoid COM errors.
-        """
-        if not PYAUTOCAD_AVAILABLE:
-            QMessageBox.warning(self, "Error", 
-                                "pyautocad not installed or not found.")
+        if not AUTOCAD_AVAILABLE or self.transfer_worker is not None:
             return
-
         params = self.get_parameters()
-        if not params:
+        if params is None:
             return
-        self.log_area.append("Transferring to AutoCAD...")
-
+        # Refresh the preview from the exact parameter snapshot being exported.
         try:
-            transfer_to_autocad(
-                radius=params['radius'],
-                side_length=params['side_length'],
-                one_or_two=params['one_or_two'],
-                shape_type=params['shape_type'],
-                defect1=params['def1'] if params['def1'] else (0,0),
-                defect2=params['def2'] if params['def2'] else (0,0),
-                theta0=params['theta0_deg'],
-                m=params['m_val'],
-                rect_w=params['rect_w'],
-                rect_h=params['rect_h'],
-                triangle_edge=params['triangle_edge'],
-                shape_circle_r=params['shape_circle_r'],
-                circle_r=params['circle_r'],
-                circle_r2=params['circle_r2']
-            )
-            self.log_area.append("Transfer to AutoCAD complete.")
-        except Exception as e:
-            self.log_area.append(f"Error transferring to AutoCAD: {e}")
+            self.canvas.draw_hex_grid(params, self.show_grid.isChecked(), self.show_angles.isChecked())
+            self.preview_parameters = params
+            self.save_button.setEnabled(True)
+        except Exception as exc:
+            self.log_area.append(f"Error generating model: {exc}")
+            return
+        self.transfer_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
+        self.transfer_progress.setRange(0, 0)
+        self.log_area.append("Connecting and transferring to AutoCAD...")
+        worker = TransferWorker(params, self)
+        self.transfer_worker = worker
+        worker.progress.connect(self.on_transfer_progress)
+        worker.failed.connect(self.log_area.append)
+        worker.succeeded.connect(self.on_transfer_succeeded)
+        worker.finished.connect(self.on_transfer_finished)
+        worker.start()
+
+    def on_transfer_progress(self, done, total):
+        self.transfer_progress.setRange(0, total)
+        self.transfer_progress.setValue(done)
+
+    def on_transfer_succeeded(self):
+        self.transfer_progress.setRange(0, 100)
+        self.transfer_progress.setValue(100)
+        self.log_area.append("Transfer to AutoCAD complete.")
+
+    def on_transfer_finished(self):
+        self.transfer_worker.deleteLater()
+        self.transfer_worker = None
+        self.transfer_button.setEnabled(AUTOCAD_AVAILABLE)
+        self.cancel_button.setEnabled(False)
+        if self.transfer_progress.maximum() == 0:
+            self.transfer_progress.setRange(0, 100)
+            self.transfer_progress.setValue(0)
+
+    def on_cancel_transfer(self):
+        if self.transfer_worker is not None:
+            self.transfer_worker.requestInterruption()
+            self.cancel_button.setEnabled(False)
+            self.log_area.append("Cancellation requested; waiting for the current AutoCAD call.")
+
+    def closeEvent(self, event):
+        if self.transfer_worker is not None:
+            self.on_cancel_transfer()
+            self.log_area.append("Wait for the transfer to stop, then close the window.")
+            event.ignore()
+        else:
+            event.accept()
 
 
 def main():

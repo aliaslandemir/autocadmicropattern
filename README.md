@@ -1,203 +1,148 @@
+# AutoCAD MicroPattern
 
-# **AutoCAD MicroPattern**
+A desktop tool for drawing hexagonal arrays of rectangles, triangles, or circles.
+Set the shape dimensions and defect positions, preview the pattern, then save a
+figure or send the geometry to AutoCAD.
 
----
+The GUI runs on Windows, Linux, and macOS. AutoCAD transfer works on Windows and
+from WSL through a Windows Python helper.
 
-## **Table of Contents**
+![Pattern preview and controls](docs/screenshot.png)
 
-- [Overview](#overview)
-- [Features](#features)
-- [Getting Started](#getting-started)
-  - [Prerequisites](#prerequisites)
-  - [Installation](#installation)
-  - [Setting Up the Virtual Environment](#setting-up-the-virtual-environment)
-- [Usage](#usage)
-  - [Running the Application](#running-the-application)
-  - [Customization Options](#customization-options)
-- [Project Structure](#project-structure)
-- [Contributing](#contributing)
-- [License](#license)
-- [Acknowledgments](#acknowledgments)
-- [Contact](#contact)
+## Setup
 
----
+Use Python 3.10 or newer. WSL needs WSLg or another display server to show the GUI.
+AutoCAD transfer requires AutoCAD for Windows with COM automation support.
 
-## **Overview**
-
-**AutoCAD MicroPattern** is a Python-based application designed to generate and visualize micropatterns on hexagonal grids and transfer geometry to AutoCAD. The project features a PyQt5-based graphical user interface (GUI), integrated Matplotlib visualization, and AutoCAD interaction using `pyautocad`.
-
-Key applications include:
-- Creating hexagonal grids for micropatterning.
-- Customizing grid parameters such as radius, side length, and defect orientation.
-- Transferring geometry (rectangles and circles) to AutoCAD.
-
----
-
-## **Features**
-
-- **Interactive GUI:** Provides a PyQt5-based interface for easy user interaction.  
-- **Hexagonal Grid Generator:** Customizable radius, side length, and nematic defect parameters.  
-- **AutoCAD Integration:** Transfers grid geometry directly to AutoCAD.  
-- **Real-Time Visualization:** Displays hex grids with orientation rectangles in embedded Matplotlib.  
-- **Save Options:** Export visualizations as PNG or PDF.
-
-## Screenshot
-
-Below is a preview of the GUI:
-
-![GUI Screenshot](docs/screenshot.png)
-
-
----
-
-## **Getting Started**
-
-Follow these steps to set up and run the project on your local machine.
-
-### **Prerequisites**
-
-Before you start, ensure the following are installed:
-
-- **Python 3.8 or higher**
-- **Git** (for cloning the repository)
-- **AutoCAD** (required for transferring geometry)
-- **Virtual Environment** (recommended for dependency management)
-
----
-
-### **Installation**
-
-1. **Clone the Repository**  
-   ```bash
-   git clone https://github.com/aliaslandemir/autocadmicropattern.git
-   cd autocadmicropattern
-   ```
-
-2. **Set Up a Virtual Environment**  
-   Create and activate a virtual environment to manage dependencies:
-   ```bash
-   python -m venv venv
-   ```
-
-   - **Windows**:  
-     ```bash
-     venv\Scripts\activate
-     ```
-   - **macOS/Linux**:  
-     ```bash
-     source venv/bin/activate
-     ```
-
-3. **Install Dependencies**  
-   Install the required libraries using the `requirements.txt` file:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
----
-
-## **Usage**
-
-### **Running the Application**
-
-After completing the installation steps:
-
-1. **Activate the Virtual Environment**  
-   ```bash
-   # Windows
-   venv\Scripts\activate
-
-   # macOS/Linux
-   source venv/bin/activate
-   ```
-
-2. **Run the Main Script**  
-   Execute the main GUI application with:  
-   ```bash
-   python main.py
-   ```
-
----
-
-### **Customization Options**
-
-You can customize grid and defect parameters directly in the GUI:
-- **Hex Grid Parameters:** Set the radius and side length of the hexagonal grid.
-- **Defect Orientation:** Choose 1 or 2 nematic defects and their positions.
-- **Geometry:** Specify the dimensions of rectangles and circles.
-- **AutoCAD Transfer:** Push the generated patterns directly to AutoCAD.
-
----
-
-## **Project Structure**
-
-```
-autocadmicropattern/
-├── docs/                 # Documentation and assets (e.g., screenshots, example data)
-│   └── screenshot.png    # Example image or visualization output
-├── GUI.py                # Main application code (contains the GUI and logic)
-├── .gitignore            # Files and directories to exclude from Git
-├── LICENSE               # Project license
-├── README.md             # Project overview and user instructions
-├── requirements.txt      # Python dependencies
-└── setup.py              # For installing the package
-
+```bash
+git clone https://github.com/aliaslandemir/autocadmicropattern.git
+cd autocadmicropattern
 ```
 
----
+### Windows
 
-## **Contributing**
+In PowerShell:
 
-Contributions are welcome! Please follow these steps:
+```powershell
+py -3 -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python GUI.py
+```
 
-1. **Fork the Repository**  
-   Click the **Fork** button on GitHub to create your own copy.
+The Windows requirements include `pyautocad` and `pywin32` for AutoCAD transfer.
 
-2. **Clone Your Fork**  
-   ```bash
-   git clone https://github.com/aliaslandemir/autocadmicropattern.git
-   ```
+### Linux, WSL, or macOS
 
-3. **Create a New Branch**  
-   ```bash
-   git checkout -b feature/new-feature
-   ```
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python GUI.py
+```
 
-4. **Make Changes & Commit**  
-   ```bash
-   git commit -m "Add new feature"
-   ```
+On Ubuntu, install `python3-venv` if creating the environment fails because
+`ensurepip` is missing. If Qt reports a missing `xcb` library, install the library
+named in the error.
 
-5. **Push Changes**  
-   ```bash
-   git push origin feature/new-feature
-   ```
+### Sending patterns from WSL to Windows AutoCAD
 
-6. **Submit a Pull Request**  
-   Go to the original repository and create a pull request.
+Install Python on Windows as well as in WSL. The Windows environment only needs
+`pyautocad` and `pywin32`.
 
----
+For a Windows Miniforge installation, run these commands in WSL. Replace
+`YOUR_USERNAME` and the installation path with your own:
 
-## **License**
+```bash
+/mnt/c/Users/YOUR_USERNAME/miniforge3/python.exe -m pip install pyautocad pywin32
+export AUTOCAD_WINDOWS_PYTHON="/mnt/c/Users/YOUR_USERNAME/miniforge3/python.exe"
+source .venv/bin/activate
+python GUI.py
+```
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+Add the `export` line to your shell profile to reuse it in later sessions. Paths
+with spaces are supported when quoted. A Windows path such as
+`C:\Users\YOUR_USERNAME\miniforge3\python.exe` also works.
 
----
+If `AUTOCAD_WINDOWS_PYTHON` is unset, the app looks for `py.exe -3`, common Conda
+installations under `/mnt/c/Users`, then `python.exe` on PATH. Set it explicitly
+if you have several Python installations or `python.exe` opens the Microsoft Store.
 
-## **Acknowledgments**
+The GUI sends geometry to the Windows helper over a pipe. You can keep the
+project and its Linux environment in WSL; there is no need to copy them to Windows.
+If the helper cannot launch, try running its `python.exe --version` from WSL and
+check that [WSL interoperability](https://learn.microsoft.com/en-us/windows/dev-environment/wsl-interop)
+is enabled.
 
-Special thanks to:
-- The developers of `PyQt5`, `matplotlib`, and `pyautocad`.
-- Contributors to open-source projects enabling AutoCAD integration.
+For a checkout shared between Windows and WSL, use separate environments, such as
+`.venv` and `.venv-win`. A Linux environment cannot run under Windows Python.
 
----
+## Using the app
 
-## **Contact**
+A default pattern appears when the app opens. Change the inputs and click
+**Generate Model** to update it. Dimensions use AutoCAD drawing units; the angle
+offset is in degrees.
 
-For questions or suggestions:
+- **Hex Grid Radius** sets the number of rings, from 0 to 100. There are
+  `1 + 3r(r + 1)` cells; radius 0 gives one cell.
+- **Hex Side Length** controls the spacing between cells.
+- **Shape Type** selects rectangles, equilateral triangles, or circles.
+- **Defects** take `x,y` coordinates and control the shape orientations. Choose
+  one or two defects; the angle multiplier applies only to the one-defect mode.
+- **Center Circles** adds rings around the origin. Set a radius to 0 to hide it.
+  Equal radii produce one ring.
+- **Save Figure** saves the current preview as PNG or PDF. Generate the preview
+  again after changing inputs before saving.
 
-- **Name:** Ali Aslan Demir  
-- **Email:** [aliaslandemir@gmail.com](mailto:aliaslandemir@gmail.com)  
-- **GitHub:** [https://github.com/aliaslandemir](https://github.com/aliaslandemir)
+Use the plot toolbar to zoom and pan. The grid and angle labels can be toggled;
+angle labels are hidden for patterns with more than 500 cells.
 
----
+### AutoCAD transfer
+
+Open a drawing in AutoCAD, then click **Transfer to AutoCAD**. This updates the
+preview and sends the current pattern to the drawing. Rectangles and triangles
+are drawn as line segments, and circles as AutoCAD circle entities. The preview
+grid, labels, and defect markers are left out.
+
+Wait for the transfer to finish before editing the drawing. **Cancel Transfer**
+stops after the current AutoCAD call completes. If a transfer fails or is
+cancelled, some geometry may remain; use **Undo** in AutoCAD to remove the
+transfer as one group.
+
+### Orientation formulas
+
+For one defect at `(x₁, y₁)`:
+
+```text
+θ = θ₀ + m atan2(y − y₁, x − x₁)
+```
+
+For two defects:
+
+```text
+θ = θ₀ + atan2(y − y₁, x − x₁) + atan2(y − y₂, x − x₂)
+```
+
+At a defect center, the preview uses `atan2(0, 0) = 0`. The physical director
+field is singular at that point.
+
+## Development
+
+Run the tests in your Python environment:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+The suite checks geometry, input validation, GUI rendering, figure saving, and
+AutoCAD transfer behavior using simulated COM objects and subprocesses. GUI tests
+run offscreen. GitHub Actions runs the tests on Linux with Python 3.10 and 3.12.
+Testing transfers into a real drawing requires Windows and AutoCAD.
+
+The main files are `GUI.py` for the interface, `geometry.py` for pattern geometry,
+`autocad_export.py` for transfer routing, and `autocad_bridge.py` for the Windows
+helper.
+
+## License
+
+[MIT](License.md). By [Ali Aslan Demir](https://github.com/aliaslandemir).
