@@ -35,13 +35,13 @@ The Windows requirements include `pyautocad` and `pywin32` for AutoCAD transfer.
 ### Linux, WSL, or macOS
 
 ```bash
-python3 -m venv .venv
+python -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 python GUI.py
 ```
 
-On Ubuntu, install `python3-venv` if creating the environment fails because
+On Ubuntu, install `python-venv` if creating the environment fails because
 `ensurepip` is missing. If Qt reports a missing `xcb` library, install the library
 named in the error.
 
@@ -51,18 +51,18 @@ Install Python on Windows as well as in WSL. The Windows environment only needs
 `pyautocad` and `pywin32`.
 
 For a Windows Miniforge installation, run these commands in WSL. Replace
-`YOUR_USERNAME` and the installation path with your own:
+`username` and the installation path with your own:
 
 ```bash
-/mnt/c/Users/YOUR_USERNAME/miniforge3/python.exe -m pip install pyautocad pywin32
-export AUTOCAD_WINDOWS_PYTHON="/mnt/c/Users/YOUR_USERNAME/miniforge3/python.exe"
+/mnt/c/Users/username/miniforge3/python.exe -m pip install pyautocad pywin32
+export AUTOCAD_WINDOWS_PYTHON="/mnt/c/Users/username/miniforge3/python.exe"
 source .venv/bin/activate
 python GUI.py
 ```
 
 Add the `export` line to your shell profile to reuse it in later sessions. Paths
 with spaces are supported when quoted. A Windows path such as
-`C:\Users\YOUR_USERNAME\miniforge3\python.exe` also works.
+`C:\Users\username\miniforge3\python.exe` also works.
 
 If `AUTOCAD_WINDOWS_PYTHON` is unset, the app looks for `py.exe -3`, common Conda
 installations under `/mnt/c/Users`, then `python.exe` on PATH. Set it explicitly
